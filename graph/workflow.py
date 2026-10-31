@@ -20,8 +20,9 @@ from agents.billing_agent import billing_agent
 from agents.account_agent import account_agent
 from agents.memory_agent import memory_agent
 
-# Import supervisor agent
-from nodes.supervisor import supervisor_agent
+# Import supervisor router (LLM routing brain) and
+# supervisor agent (response reviewer + HITL)
+from nodes.supervisor import supervisor_router, supervisor_agent
 
 # Import persistent memory checkpointer
 from database.checkpoint import memory
@@ -33,10 +34,10 @@ def build_graph():
 
     Workflow Stages:
     1. Customer Profile Extraction
-    2. Intent Classification
-    3. Specialized Agent Processing
-    4. Human-in-the-Loop Validation (if required)
-    5. Supervisor Review
+    2. HITL Safety Check (rules-based requires_approval flag)
+    3. LLM Supervisor Router <-> Specialized Agents (loop)
+    4. Supervisor Review (polish)
+    5. Human-in-the-Loop Validation (if required)
     6. Final Response Delivery
     """
 
@@ -72,7 +73,10 @@ def build_graph():
     # Memory recall agent
     builder.add_node("memory", memory_agent)
 
-    # Final supervisor agent
+    # LLM supervisor router (decides which agent runs next)
+    builder.add_node("supervisor_router", supervisor_router)
+
+    # Final supervisor agent (review / polish / HITL)
     builder.add_node("supervisor", supervisor_agent)
 
     # Human approval checkpoint
@@ -96,62 +100,56 @@ def build_graph():
     )
 
     # ============================================================
-    # STEP 4: ROUTER PASS #1
-    # CLASSIFIER → SPECIALIZED AGENTS
+    # STEP 4: CLASSIFIER → SUPERVISOR ROUTER (FIRST CALL)
     # ============================================================
 
-    builder.add_conditional_edges(
+    builder.add_edge(
         "classify_intent",
-        agent_router,
+        "supervisor_router"
+    )
+
+    # ============================================================
+    # STEP 5: SUPERVISOR ROUTER → AGENT OR FINISH
+    # ============================================================
+
+    # The router's LLM decision (state["next_agent"]) picks
+    # the next specialist, or FINISH to go to review
+
+    builder.add_conditional_edges(
+        "supervisor_router",
+        lambda state: state["next_agent"],
         {
             "sales": "sales",
             "technical": "technical",
             "billing": "billing",
             "account": "account",
-            "memory_recall": "memory"
+            "memory": "memory",
+            "FINISH": "supervisor"
         }
     )
 
     # ============================================================
-    # STEP 5: ROUTER PASS #2
-    # AGENTS → SUPERVISOR OR HUMAN CHECKPOINT
+    # STEP 6: AGENTS REPORT BACK TO SUPERVISOR ROUTER
     # ============================================================
 
-    # Each specialized agent can:
-    # 1. Send response directly to Supervisor
-    # 2. Trigger Human Approval Checkpoint
+    # Every agent returns to the router, which can re-route
+    # to another specialist after seeing the response
 
     for agent_node in [
         "sales",
         "technical",
         "billing",
-        "account"
+        "account",
+        "memory"
     ]:
 
-        builder.add_conditional_edges(
+        builder.add_edge(
             agent_node,
-            agent_router,
-            {
-                "human_checkpoint":
-                    "human_checkpoint",
-
-                "sales":
-                    "supervisor",
-
-                "technical":
-                    "supervisor",
-
-                "billing":
-                    "supervisor",
-
-                "account":
-                    "supervisor"
-            }
+            "supervisor_router"
         )
 
     # ============================================================
-    # STEP 6: ROUTER PASS #3
-    # SUPERVISOR → END OR HUMAN REVIEW
+    # STEP 7: SUPERVISOR REVIEW → END OR HUMAN CHECKPOINT
     # ============================================================
 
     builder.add_conditional_edges(
@@ -166,23 +164,11 @@ def build_graph():
         }
     )
 
-    # ============================================================
-    # STEP 7: RE-ENTRY PATHS
-    # ============================================================
-
     # After human approval/rejection,
     # return to supervisor for final processing
 
     builder.add_edge(
         "human_checkpoint",
-        "supervisor"
-    )
-
-    # Memory recall responses are also
-    # passed through supervisor polishing
-
-    builder.add_edge(
-        "memory",
         "supervisor"
     )
 

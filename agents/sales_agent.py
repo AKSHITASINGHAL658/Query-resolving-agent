@@ -4,19 +4,15 @@ from knowledge_base.sales_kb import SALES_KB
 def sales_agent(state):
     """Handles product information, subscription plans, and pricing details."""
     query = state["messages"][-1].content
-    state["kb_context"] = SALES_KB  # Save retrieved RAG content to state 
-    # 🚨 AGENT EMERGENCY OVERWRITE
-    if state.get("requires_approval") and not state.get("human_feedback"):
-        state["query_category"] = "human_checkpoint"
-        state["agent_draft_response"] = ""  # Strictly no summarization or draft generation
-        return state
+    # Append (not overwrite) so multi-hop turns keep every consulted agent's context
+    state["kb_context"] = (state.get("kb_context") or "") + f"\n\n[SALES KB]:\n{SALES_KB}"
     #prompt
     prompt = f"""
     You are an expert Sales Support Agent for ABC Technologies.
     Answer the customer's query using only the provided Pricing Guide context.
     
     Context:
-    {state["kb_context"]}
+    {SALES_KB}
     
     Customer Query: {query}
     """

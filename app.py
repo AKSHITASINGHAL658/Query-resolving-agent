@@ -116,8 +116,7 @@ while True:
                 {
                     "human_feedback": "approved",
                     "requires_approval": False,
-                    "query_category": "supervisor",
-                    "agent_draft_response": ""
+                    "query_category": "supervisor"
                 },
                 as_node="human_checkpoint"
             )
@@ -150,8 +149,7 @@ while True:
                         reason if reason.strip()
                         else "Policy restrictions.",
                     "requires_approval": False,
-                    "query_category": "supervisor",
-                    "agent_draft_response": ""
+                    "query_category": "supervisor"
                 },
                 as_node="human_checkpoint"
             )

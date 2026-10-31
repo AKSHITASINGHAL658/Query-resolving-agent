@@ -9,14 +9,16 @@ console = Console()
 
 def classify_intent(state):
     """
-    Intent Classification Node
+    Intent Classification Node (Rules-Based Safety Check)
 
     Responsibilities:
-    1. Analyze customer queries.
-    2. Determine the appropriate support category.
-    3. Identify high-risk requests requiring approval.
-    4. Route requests to specialized agents.
-    5. Update workflow state with routing decisions.
+    1. Identify high-risk requests requiring human approval.
+    2. Reset per-turn routing state for the Supervisor Router.
+
+    Routing itself is NOT decided here anymore -- the LLM-based
+    supervisor_router picks which specialized agent(s) to call.
+    The requires_approval flag set here is passed into the
+    router prompt so it is aware of the sensitivity.
     """
 
     # ============================================================
@@ -28,11 +30,20 @@ def classify_intent(state):
     query = state["messages"][-1].content.lower()
 
     # ============================================================
-    # STEP 2: INITIALIZE DEFAULT STATE VALUES
+    # STEP 2: RESET PER-TURN ROUTING STATE
     # ============================================================
 
-    # Default routing category
-    state["query_category"] = "account"
+    # The checkpointer persists state across turns, so the
+    # router's loop counter and collected responses must be
+    # cleared at the start of every new customer query.
+    state["routing_hops"] = 0
+    state["agent_responses"] = []
+    state["router_reasoning"] = None
+    state["next_agent"] = ""
+    state["agent_draft_response"] = ""
+    state["kb_context"] = ""
+    state["human_feedback"] = None
+    state["query_category"] = "supervisor_router"
 
     # By default, approval is not required
     state["requires_approval"] = False
@@ -61,159 +72,22 @@ def classify_intent(state):
         state["requires_approval"] = True
 
     # ============================================================
-    # STEP 4: QUERY CLASSIFICATION & ROUTING
-    # ============================================================
-
-    # ------------------------------------------------------------
-    # MEMORY RECALL QUERIES
-    # ------------------------------------------------------------
-    # Example:
-    # "What was my previous support issue?"
-
-    if any(word in query for word in [
-        "previous support",
-        "previous issue",
-        "last time",
-        "my history",
-        "what was my"
-    ]):
-
-        state["query_category"] = "memory_recall"
-
-    # ------------------------------------------------------------
-    # BILLING SUPPORT QUERIES
-    # ------------------------------------------------------------
-    # Examples:
-    # - Payment issues
-    # - Invoice requests
-    # - Refund requests
-
-    elif any(word in query for word in [
-        "invoice",
-        "bill",
-        "billing",
-        "payment",
-        "charge",
-        "receipt",
-        "refund",
-        "paid",
-        "transaction"
-    ]):
-
-        state["query_category"] = "billing"
-
-    # ------------------------------------------------------------
-    # SALES SUPPORT QUERIES
-    # ------------------------------------------------------------
-    # Examples:
-    # - Pricing information
-    # - Subscription plans
-    # - Product features
-
-    elif any(word in query for word in [
-        "price",
-        "pricing",
-        "plan",
-        "plans",
-        "subscription",
-        "cost",
-        "product",
-        "features",
-        "buy",
-        "info"
-    ]):
-
-        state["query_category"] = "sales"
-
-    # ------------------------------------------------------------
-    # TECHNICAL SUPPORT QUERIES
-    # ------------------------------------------------------------
-    # Examples:
-    # - Login failures
-    # - Installation issues
-    # - Application crashes
-
-    elif any(word in query for word in [
-        "crash",
-        "crashes",
-        "error",
-        "bug",
-        "install",
-        "installation",
-        "login",
-        "failed",
-        "upload",
-        "configure",
-        "configuration"
-    ]):
-
-        state["query_category"] = "technical"
-
-    # ------------------------------------------------------------
-    # ACCOUNT SUPPORT QUERIES
-    # ------------------------------------------------------------
-    # Examples:
-    # - Password reset
-    # - Profile updates
-    # - Account activation
-
-    elif any(word in query for word in [
-        "password",
-        "reset",
-        "profile",
-        "update",
-        "activate",
-        "activation",
-        "deactivate",
-        "account",
-        "username"
-    ]):
-
-        state["query_category"] = "account"
-
-    # ------------------------------------------------------------
-    # FALLBACK ROUTE
-    # ------------------------------------------------------------
-
-    else:
-        # Unknown requests are routed to Account Support
-        # as a secure default option
-        state["query_category"] = "account"
-
-    # ============================================================
-    # STEP 5: LOG ROUTING DECISION
+    # STEP 4: DISPLAY SAFETY CHECK VISUALIZATION
     # ============================================================
 
     print(
-        f"\n[ROUTED TO] "
-        f"{state['query_category'].upper()} | "
-        f"[REQUIRES APPROVAL] "
-        f"{state['requires_approval']}"
+        f"\n[REQUIRES APPROVAL] {state['requires_approval']}"
     )
-
-    # ============================================================
-    # STEP 6: DISPLAY ROUTING VISUALIZATION
-    # ============================================================
 
     route_text = Text()
 
-    # Display classified category
+    # Routing is delegated to the LLM supervisor router
     route_text.append(
-        "🎯 Target Intent Category: ",
+        "🔀 Next Step: ",
         style="bold white"
     )
     route_text.append(
-        f"{state['query_category'].upper()}\n",
-        style="bold cyan"
-    )
-
-    # Display routing path
-    route_text.append(
-        "🔀 Router Path Directed: ",
-        style="bold white"
-    )
-    route_text.append(
-        f"{state['query_category'].upper()}\n",
+        "LLM SUPERVISOR ROUTER\n",
         style="bold yellow underline"
     )
 
@@ -237,11 +111,11 @@ def classify_intent(state):
             style="bold green"
         )
 
-    # Show routing summary panel
+    # Show safety summary panel
     console.print(
         Panel(
             route_text,
-            title="🚦 Graph Router Matrix",
+            title="🚦 HITL Safety Check",
             border_style="magenta",
             expand=False
         )
